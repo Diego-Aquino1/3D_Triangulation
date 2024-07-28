@@ -14,6 +14,8 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include <thread>
+#include <chrono>
 
 typedef CGAL::Exact_predicates_inexact_constructions_kernel K;
 typedef CGAL::Delaunay_triangulation_3<K> Delaunay;
@@ -139,13 +141,31 @@ int main() {
     std::vector<Point_3> points;
     loadOBJ("/Users/diego/Downloads/single_pumpkin.obj", points);
 
-    cv::VideoCapture cap(0);
-    if (!cap.isOpened()) {
+    cv::VideoCapture cap;
+    std::cout << "Por favor, otorga permisos de cámara si es necesario..." << std::endl;
+    bool cameraOpened = false;
+    const int max_attempts = 10; // número máximo de intentos
+    for (int attempt = 0; attempt < max_attempts; ++attempt) {
+        cap.open(0);
+        if (cap.isOpened()) {
+            cameraOpened = true;
+            break;
+        }
+        std::cout << "Intentando abrir la cámara (intento " << (attempt + 1) << ")..." << std::endl;
+        std::this_thread::sleep_for(std::chrono::seconds(3)); // esperar 3 segundos entre intentos
+    }
+
+    if (!cameraOpened) {
         std::cerr << "Error: Could not open camera" << std::endl;
         return -1;
     }
 
+    // Esperar unos segundos antes de intentar capturar la imagen
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+
     cv::Mat frame;
+    cv::Mat cameraMatrix, distCoeffs;
+
     std::vector<cv::Point2f> imagePoints;
     std::vector<cv::Point3f> objectPoints;
     for (int i = 0; i < 9; i++) {
@@ -154,7 +174,7 @@ int main() {
         }
     }
 
-    bool triangulated = false;
+    bool patternRecognized = false;
 
     while (!glfwWindowShouldClose(window)) {
         cap >> frame;
@@ -162,23 +182,57 @@ int main() {
 
         cv::Mat gray;
         cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
-        bool found = cv::findChessboardCorners(gray, cv::Size(6, 9), imagePoints);
+        bool found = cv::findChessboardCorners(gray, cv::Size(3, 3), imagePoints);
 
-        if (found && !triangulated) {
-            cv::drawChessboardCorners(frame, cv::Size(6, 9), imagePoints, found);
-            
-            // Triangulate and render the 3D model
-            triangulateAndRender(points, shader, glm::mat4(1.0f), glm::mat4(1.0f));
-            
-            triangulated = true;
+        if (found) {
+            cv::drawChessboardCorners(frame, cv::Size(3, 3), imagePoints, found);
+            if (!patternRecognized) {
+                // Asegúrate de que hay suficientes puntos antes de llamar a solvePnP
+                if (imagePoints.size() >= 4) {
+                    cv::Mat rvec, tvec;
+                    cv::solvePnP(objectPoints, imagePoints, cameraMatrix, distCoeffs, rvec, tvec);
+
+                    cv::Mat rotMat;
+                    cv::Rodrigues(rvec, rotMat);
+
+                    glm::mat4 view = glm::mat4(1.0f);
+                    view[0][0] = rotMat.at<double>(0, 0);
+                    view[0][1] = rotMat.at<double>(0, 1);
+                    view[0][2] = rotMat.at<double>(0, 2);
+                    view[1][0] = rotMat.at<double>(1, 0);
+                    view[1][1] = rotMat.at<double>(1, 1);
+                    view[1][2] = rotMat.at<double>(1, 2);
+                    view[2][0] = rotMat.at<double>(2, 0);
+                    view[2][1] = rotMat.at<double>(2, 1);
+                    view[2][2] = rotMat.at<double>(2, 2);
+                    view[3][0] = tvec.at<double>(0);
+                    view[3][1] = tvec.at<double>(1);
+                    view[3][2] = tvec.at<double>(2);
+
+                    glm::mat4 projection = glm::perspective(glm::radians(45.0f), 4.0f / 3.0f, 0.1f, 100.0f);
+
+                    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+                    triangulateAndRender(points, shader, view, projection);
+                    glfwSwapBuffers(window);
+
+                    patternRecognized = true;
+                    std::cout << "Pattern recognized and triangulated." << std::endl;
+                } else {
+                    std::cout << "Insufficient points for solvePnP." << std::endl;
+                }
+            }
+        } else {
+            std::cout << "Pattern not recognized." << std::endl;
         }
 
         cv::imshow("Camera", frame);
-        if (cv::waitKey(30) >= 0) break;
+        if (cv::waitKey(30) >= 0) break; // Press 'ESC' to exit
 
         glfwPollEvents();
-        glfwSwapBuffers(window);
     }
+
+    cap.release();
+    cv::destroyAllWindows();
 
     glfwTerminate();
     return 0;
