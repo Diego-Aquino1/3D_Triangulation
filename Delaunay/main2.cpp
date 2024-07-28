@@ -45,7 +45,6 @@ void triangulateAndRender(const std::vector<Point_3>& points, Shader& shader, co
     std::vector<unsigned int> indexData;
     std::map<Point_3, unsigned int> vertexIndexMap;
 
-    // Asignar índices a los vértices
     unsigned int index = 0;
     for (auto v = dt.finite_vertices_begin(); v != dt.finite_vertices_end(); ++v) {
         const Point_3& point = v->point();
@@ -55,7 +54,6 @@ void triangulateAndRender(const std::vector<Point_3>& points, Shader& shader, co
         vertexIndexMap[point] = index++;
     }
 
-    // Obtener las aristas de los tetraedros en lugar de las caras completas
     std::set<std::pair<unsigned int, unsigned int>> edges;
     for (auto cell = dt.finite_cells_begin(); cell != dt.finite_cells_end(); ++cell) {
         for (int i = 0; i < 4; ++i) {
@@ -69,7 +67,6 @@ void triangulateAndRender(const std::vector<Point_3>& points, Shader& shader, co
         }
     }
 
-    // Convertir el conjunto de aristas a un índice de datos
     for (const auto& edge : edges) {
         indexData.push_back(edge.first);
         indexData.push_back(edge.second);
@@ -88,14 +85,12 @@ void triangulateAndRender(const std::vector<Point_3>& points, Shader& shader, co
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, indexData.size() * sizeof(unsigned int), indexData.data(), GL_STATIC_DRAW);
 
-    // Configuración de los atributos de los vértices
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
 
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindVertexArray(0);
 
-    // Configuración del shader
     shader.Use();
     glm::mat4 model = glm::mat4(1.0f);
     GLuint modelLoc = glGetUniformLocation(shader.Program, "model");
@@ -105,7 +100,6 @@ void triangulateAndRender(const std::vector<Point_3>& points, Shader& shader, co
     glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(view));
     glUniformMatrix4fv(projectionLoc, 1, GL_FALSE, glm::value_ptr(projection));
 
-    // Dibujar líneas en lugar de triángulos
     glBindVertexArray(VAO);
     glDrawElements(GL_LINES, indexData.size(), GL_UNSIGNED_INT, 0);
     glBindVertexArray(0);
@@ -116,7 +110,6 @@ void triangulateAndRender(const std::vector<Point_3>& points, Shader& shader, co
 }
 
 int main() {
-    // Inicialización de GLFW y OpenGL
     if (!glfwInit()) {
         std::cerr << "Failed to initialize GLFW" << std::endl;
         return -1;
@@ -146,7 +139,6 @@ int main() {
     std::vector<Point_3> points;
     loadOBJ("/Users/diego/Downloads/single_pumpkin.obj", points);
 
-    // Inicialización de OpenCV y detección de patrón
     cv::VideoCapture cap(0);
     if (!cap.isOpened()) {
         std::cerr << "Error: Could not open camera" << std::endl;
@@ -154,22 +146,15 @@ int main() {
     }
 
     cv::Mat frame;
-    cv::Mat cameraMatrix, distCoeffs;
-
-    // Calibrar cámara o cargar parámetros pre-calibrados
-    // Aquí asumimos que ya tienes los parámetros de la cámara
-    // cv::FileStorage fs("calibration_data.yml", cv::FileStorage::READ);
-    // fs["camera_matrix"] >> cameraMatrix;
-    // fs["distortion_coefficients"] >> distCoeffs;
-
     std::vector<cv::Point2f> imagePoints;
     std::vector<cv::Point3f> objectPoints;
-    // Definir puntos del patrón de ajedrez
     for (int i = 0; i < 9; i++) {
         for (int j = 0; j < 6; j++) {
             objectPoints.emplace_back(j * 0.025f, i * 0.025f, 0.0f);
         }
     }
+
+    bool triangulated = false;
 
     while (!glfwWindowShouldClose(window)) {
         cap >> frame;
@@ -179,31 +164,13 @@ int main() {
         cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
         bool found = cv::findChessboardCorners(gray, cv::Size(6, 9), imagePoints);
 
-        if (found) {
-            cv::Mat rvec, tvec;
-            cv::solvePnP(objectPoints, imagePoints, cameraMatrix, distCoeffs, rvec, tvec);
-
-            cv::Mat rotMat;
-            cv::Rodrigues(rvec, rotMat);
-
-            glm::mat4 view = glm::mat4(1.0f);
-            // Copiar la matriz de rotación desde OpenCV a glm
-            view[0][0] = rotMat.at<double>(0, 0);
-            view[0][1] = rotMat.at<double>(0, 1);
-            view[0][2] = rotMat.at<double>(0, 2);
-            view[1][0] = rotMat.at<double>(1, 0);
-            view[1][1] = rotMat.at<double>(1, 1);
-            view[1][2] = rotMat.at<double>(1, 2);
-            view[2][0] = rotMat.at<double>(2, 0);
-            view[2][1] = rotMat.at<double>(2, 1);
-            view[2][2] = rotMat.at<double>(2, 2);
-            view[3][0] = tvec.at<double>(0);
-            view[3][1] = tvec.at<double>(1);
-            view[3][2] = tvec.at<double>(2);
-
-            glm::mat4 projection = glm::perspective(glm::radians(45.0f), 4.0f / 3.0f, 0.1f, 100.0f);
-
-            triangulateAndRender(points, shader, view, projection);
+        if (found && !triangulated) {
+            cv::drawChessboardCorners(frame, cv::Size(6, 9), imagePoints, found);
+            
+            // Triangulate and render the 3D model
+            triangulateAndRender(points, shader, glm::mat4(1.0f), glm::mat4(1.0f));
+            
+            triangulated = true;
         }
 
         cv::imshow("Camera", frame);
